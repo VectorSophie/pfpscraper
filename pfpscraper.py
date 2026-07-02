@@ -19,7 +19,12 @@ OUT = Path(CONFIG["output_dir"])
 USERS = CONFIG["users"]              # {user_id: slug}
 STAMPS = CONFIG.get("stamps", {})    # {slug: [letters]}
 SAVE_MAIN = CONFIG.get("save_main", False)  # also store global pfp as -main
+GUILD_ID = CONFIG.get("guild_id")    # restrict to this server (else all guilds)
 SIZE = 512
+
+
+def in_scope(guild) -> bool:
+    return GUILD_ID is None or str(guild.id) == str(GUILD_ID)
 
 
 def load_token():
@@ -128,6 +133,8 @@ async def on_ready():
     state = load_state()
     saved = 0
     for guild in client.guilds:
+        if not in_scope(guild):
+            continue
         for member in guild.members:
             if str(member.id) in USERS:
                 if await save_member(member, state):
@@ -137,14 +144,16 @@ async def on_ready():
 
 @client.event
 async def on_member_update(before, after):
-    if str(after.id) in USERS:
+    if in_scope(after.guild) and str(after.id) in USERS:
         await save_member(after, load_state())
 
 
 @client.event
 async def on_user_update(before, after):
-    # global avatar change: find the member wherever we share a guild
+    # global avatar change: find the member in the scoped guild
     for guild in client.guilds:
+        if not in_scope(guild):
+            continue
         m = guild.get_member(after.id)
         if m and str(m.id) in USERS:
             await save_member(m, load_state())
