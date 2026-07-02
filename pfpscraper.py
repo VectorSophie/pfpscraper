@@ -18,6 +18,7 @@ STATE_PATH = HERE / "state.json"
 OUT = Path(CONFIG["output_dir"])
 USERS = CONFIG["users"]              # {user_id: slug}
 STAMPS = CONFIG.get("stamps", {})    # {slug: [letters]}
+SAVE_MAIN = CONFIG.get("save_main", False)  # also store global pfp as -main
 SIZE = 512
 
 
@@ -62,41 +63,58 @@ def stamp(img: Image.Image, letter: str) -> Image.Image:
     return img
 
 
-def targets(slug: str):
+def targets(slug: str, suffix: str = ""):
     """Filenames to write for a slug (plain name; date is the folder)."""
     if slug in STAMPS:
-        return [(f"{slug}-{L}.png", L) for L in STAMPS[slug]]
-    return [(f"{slug}.png", None)]
+        return [(f"{slug}-{L}{suffix}.png", L) for L in STAMPS[slug]]
+    return [(f"{slug}{suffix}.png", None)]
+
+
+def sources(member: discord.Member):
+    """(kind, filename-suffix, asset) to save for a member.
+
+    Default: the per-server avatar (guild avatar if set, else global).
+    If SAVE_MAIN, also the main/global avatar as `<slug>-main.png` — but only
+    when it differs from the server one (else it's the same image)."""
+    out = [("server", "", member.display_avatar)]
+    if SAVE_MAIN:
+        main = member.avatar or member.default_avatar
+        if main.key != member.display_avatar.key:
+            out.append(("main", "-main", main))
+    return out
 
 
 async def save_member(member: discord.Member, state: dict) -> bool:
-    """Save member's avatar if its hash changed. Returns True if saved."""
+    """Save member's avatar(s) if the hash changed. Returns True if any saved."""
     uid = str(member.id)
     slug = USERS.get(uid)
     if slug is None:
         return False
-    key = member.display_avatar.key  # avatar hash; changes when pfp changes
-    if state.get(uid) == key:
-        return False
 
+    seen = state.setdefault(uid, {})
+    if isinstance(seen, str):  # migrate old single-hash format
+        seen = state[uid] = {}
     date = datetime.now().strftime("%y%m%d")
     day_dir = OUT / date
-    files = targets(slug)
-    if all((day_dir / name).exists() for name, _ in files):
-        state[uid] = key  # already have today's copy; just remember the hash
-        save_state(state)
-        return False
+    changed = False
 
-    day_dir.mkdir(parents=True, exist_ok=True)
-    data = await member.display_avatar.replace(size=SIZE).read()
-    base = to_png(data)
-    for name, letter in files:
-        img = stamp(base, letter) if letter else base
-        img.save(day_dir / name)
-    state[uid] = key
+    for kind, suffix, asset in sources(member):
+        if seen.get(kind) == asset.key:
+            continue
+        files = targets(slug, suffix)
+        if all((day_dir / name).exists() for name, _ in files):
+            seen[kind] = asset.key  # already have today's copy; remember hash
+            continue
+        day_dir.mkdir(parents=True, exist_ok=True)
+        base = to_png(await asset.replace(size=SIZE).read())
+        for name, letter in files:
+            (stamp(base, letter) if letter else base).save(day_dir / name)
+        seen[kind] = asset.key
+        changed = True
+        print(f"saved {slug} ({kind}): {[n for n, _ in files]}")
+
     save_state(state)
-    print(f"saved {slug}: {[n for n, _ in files]}")
-    return True
+    return changed
 
 
 intents = discord.Intents.default()

@@ -1,6 +1,6 @@
-"""Self-check: `python test_discscraper.py`. No framework."""
+"""Self-check: `python test_pfpscraper.py`. No framework."""
 from PIL import Image
-import discscraper as d
+import pfpscraper as d
 
 
 def test_stamp_produces_distinct_images():
@@ -16,6 +16,8 @@ def test_targets():
     assert d.targets("bitzy") == [("bitzy.png", None)]
     # stamped user (swso is configured with A/B): two files
     assert d.targets("swso") == [("swso-A.png", "A"), ("swso-B.png", "B")]
+    # main/global copy uses a -main suffix
+    assert d.targets("bitzy", "-main") == [("bitzy-main.png", None)]
 
 
 def test_hash_dedup():

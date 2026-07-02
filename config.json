@@ -1,5 +1,6 @@
 {
   "output_dir": "C:/Users/PC/OneDrive/Desktop/league",
+  "save_main": false,
   "users": {
     "652905235605487620": "bitzy",
     "516355224995364864": "favivito",
@@ -20,6 +21,9 @@
     "407562704828760065": "swd"
   },
   "stamps": {
-    "swso": ["A", "B"]
+    "swso": [
+      "A",
+      "B"
+    ]
   }
 }

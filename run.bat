@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-start "" pythonw discscraper.py
+start "" pythonw pfpscraper.py
