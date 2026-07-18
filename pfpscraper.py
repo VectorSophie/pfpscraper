@@ -6,6 +6,7 @@ API cost (only downloads bytes when an avatar actually changes).
 """
 import io
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,13 @@ import discord
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).parent
+
+# Runs headless under pythonw (no stdout/stderr), so log to a file in utf-8 --
+# printing would die on the console's local codec.
+logging.basicConfig(filename=HERE / "pfpscraper.log", level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s",
+                    encoding="utf-8")
+log = logging.getLogger("pfpscraper")
 CONFIG = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
 STATE_PATH = HERE / "state.json"
 OUT = Path(CONFIG["output_dir"])
@@ -20,6 +28,7 @@ USERS = CONFIG["users"]              # {user_id: slug}
 STAMPS = CONFIG.get("stamps", {})    # {slug: [letters]}
 SAVE_MAIN = CONFIG.get("save_main", False)  # also store global pfp as -main
 GUILD_ID = CONFIG.get("guild_id")    # restrict to this server (else all guilds)
+CURRENT = OUT / "current"            # always mirrors the newest set
 SIZE = 512
 
 
@@ -100,23 +109,24 @@ async def save_member(member: discord.Member, state: dict) -> bool:
     if isinstance(seen, str):  # migrate old single-hash format
         seen = state[uid] = {}
     date = datetime.now().strftime("%y%m%d")
-    day_dir = OUT / date
+    dirs = [OUT / date, CURRENT]  # dated history + always-latest mirror
     changed = False
 
     for kind, suffix, asset in sources(member):
         if seen.get(kind) == asset.key:
             continue
         files = targets(slug, suffix)
-        if all((day_dir / name).exists() for name, _ in files):
+        if all((d / name).exists() for d in dirs for name, _ in files):
             seen[kind] = asset.key  # already have today's copy; remember hash
             continue
-        day_dir.mkdir(parents=True, exist_ok=True)
         base = to_png(await asset.replace(size=SIZE).read())
-        for name, letter in files:
-            (stamp(base, letter) if letter else base).save(day_dir / name)
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+            for name, letter in files:
+                (stamp(base, letter) if letter else base).save(d / name)
         seen[kind] = asset.key
         changed = True
-        print(f"saved {slug} ({kind}): {[n for n, _ in files]}")
+        log.info("saved %s (%s): %s", slug, kind, [n for n, _ in files])
 
     save_state(state)
     return changed
@@ -129,7 +139,7 @@ client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
-    OUT.mkdir(parents=True, exist_ok=True)
+    CURRENT.mkdir(parents=True, exist_ok=True)  # always exists, even if nothing changed
     state = load_state()
     saved = 0
     for guild in client.guilds:
@@ -139,7 +149,7 @@ async def on_ready():
             if str(member.id) in USERS:
                 if await save_member(member, state):
                     saved += 1
-    print(f"ready as {client.user} — reconciled, {saved} new avatar(s)")
+    log.info("ready as %s: reconciled, %s new avatar(s)", client.user, saved)
 
 
 @client.event
@@ -161,4 +171,5 @@ async def on_user_update(before, after):
 
 
 if __name__ == "__main__":
-    client.run(load_token())
+    # log_handler=None: don't let discord.py attach its own stderr handler
+    client.run(load_token(), log_handler=None)

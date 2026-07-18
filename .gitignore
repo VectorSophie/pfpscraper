@@ -1,4 +1,5 @@
 .env
 state.json
+pfpscraper.log
 __pycache__/
 *.pyc

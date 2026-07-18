@@ -23,5 +23,7 @@ Event-driven (gateway), near-zero API cost: it only downloads an image when some
 ## Output
 `<output_dir>/<YYMMDD>/<slug>.png` — one dated folder per day, 512px static PNG (the per-server avatar). Stamped users get `<slug>-A.png`, `<slug>-B.png`, etc. With `save_main`, the global pfp is also written as `<slug>-main.png`. Same-day duplicates are skipped.
 
+`<output_dir>/current/` always mirrors the newest set — every save writes to both the dated folder and `current/`, so point your tierlist at `current/` and it's never stale.
+
 ## Test
 `python test_pfpscraper.py`

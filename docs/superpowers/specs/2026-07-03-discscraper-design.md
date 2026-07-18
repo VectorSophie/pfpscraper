@@ -19,7 +19,7 @@ Dependencies: `discord.py`, `Pillow` (stamping only).
 ## Flow
 1. **Startup reconciliation:** for each mapped member, compare current `display_avatar` hash to `state.json`. Changed/new → save. Covers avatars that changed while the PC was off.
 2. **Live:** `on_member_update` (server avatar) and `on_user_update` (global avatar). Mapped user + hash changed → save.
-3. **Save:** `display_avatar` (per-server avatar if set, else global) as static PNG, 512px → write `<output_dir>/<YYMMDD>/<slug>.png` (one folder per day). Skip write if that file exists (no same-day churn). Update `state.json`. If `save_main` is set, also save the global pfp as `<slug>-main.png` (skipped when identical to the server one).
+3. **Save:** `display_avatar` (per-server avatar if set, else global) as static PNG, 512px → write to both `<output_dir>/<YYMMDD>/<slug>.png` (dated history) and `<output_dir>/current/<slug>.png` (always the newest set; created on startup even if nothing changed). Skip write only if the file exists in both (no same-day churn). Update `state.json`. If `save_main` is set, also save the global pfp as `<slug>-main.png` (skipped when identical to the server one).
 
 ## Stamping (swso)
 For any slug listed in `stamps`, write one file per letter into the day folder: `<slug>-<L>.png`. Same source image, letter drawn bottom-right via Pillow — bold white, thin dark outline, ~1/4 image height.
