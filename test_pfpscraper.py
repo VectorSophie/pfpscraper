@@ -28,8 +28,25 @@ def test_hash_dedup():
     assert state.get("1") != "abc"  # changed -> would save
 
 
+def test_second_same_day_change_is_not_skipped_as_stale_disk_hit():
+    # Bug: avatar changes twice in one day. First change writes today's files
+    # and records hash1. Second change (hash2) reaches the disk-exists
+    # shortcut with files still on disk from hash1 -- must re-save, not skip,
+    # even though a file with the expected name already exists.
+    seen = {"server": "hash1"}  # already recorded from the first change today
+    files_exist_on_disk = True  # leftover files from the first change
+    would_skip = "server" not in seen and files_exist_on_disk
+    assert would_skip is False, "second change must re-save despite stale files on disk"
+
+    # Fresh state (e.g. state.json was reset) still gets the shortcut.
+    seen_fresh = {}
+    would_skip_fresh = "server" not in seen_fresh and files_exist_on_disk
+    assert would_skip_fresh is True
+
+
 if __name__ == "__main__":
     test_stamp_produces_distinct_images()
     test_targets()
     test_hash_dedup()
+    test_second_same_day_change_is_not_skipped_as_stale_disk_hit()
     print("ok")

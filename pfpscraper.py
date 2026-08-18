@@ -4,12 +4,14 @@ Gateway-connected while the PC is on. On startup it reconciles anyone who
 changed while offline; then reacts to live avatar-update events. Near-zero
 API cost (only downloads bytes when an avatar actually changes).
 """
+import asyncio
 import io
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
 
+import aiohttp
 import discord
 from PIL import Image, ImageDraw, ImageFont
 
@@ -98,6 +100,27 @@ def sources(member: discord.Member):
     return out
 
 
+FETCH_ERRORS = (discord.HTTPException, aiohttp.ClientError)
+
+
+async def fetch_bytes(asset: discord.Asset, attempts: int = 3, delay: float = 2.0) -> bytes:
+    """Discord's CDN can briefly error right after an avatar-update event fires
+    (it hasn't propagated yet), and this machine's network drops DNS/connections
+    often (see log history) -- retry a few times before giving up."""
+    for attempt in range(attempts):
+        try:
+            return await asset.replace(size=SIZE).read()
+        except FETCH_ERRORS:
+            if attempt == attempts - 1:
+                raise
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+STATE_LOCK = asyncio.Lock()  # on_member_update/on_user_update fire back-to-back
+                              # for one avatar change; serialize state read-modify-write
+
+
 async def save_member(member: discord.Member, state: dict) -> bool:
     """Save member's avatar(s) if the hash changed. Returns True if any saved."""
     uid = str(member.id)
@@ -105,31 +128,40 @@ async def save_member(member: discord.Member, state: dict) -> bool:
     if slug is None:
         return False
 
-    seen = state.setdefault(uid, {})
-    if isinstance(seen, str):  # migrate old single-hash format
-        seen = state[uid] = {}
-    date = datetime.now().strftime("%y%m%d")
-    dirs = [OUT / date, CURRENT]  # dated history + always-latest mirror
-    changed = False
+    async with STATE_LOCK:
+        seen = state.setdefault(uid, {})
+        if isinstance(seen, str):  # migrate old single-hash format
+            seen = state[uid] = {}
+        date = datetime.now().strftime("%y%m%d")
+        dirs = [OUT / date, CURRENT]  # dated history + always-latest mirror
+        changed = False
 
-    for kind, suffix, asset in sources(member):
-        if seen.get(kind) == asset.key:
-            continue
-        files = targets(slug, suffix)
-        if all((d / name).exists() for d in dirs for name, _ in files):
-            seen[kind] = asset.key  # already have today's copy; remember hash
-            continue
-        base = to_png(await asset.replace(size=SIZE).read())
-        for d in dirs:
-            d.mkdir(parents=True, exist_ok=True)
-            for name, letter in files:
-                (stamp(base, letter) if letter else base).save(d / name)
-        seen[kind] = asset.key
-        changed = True
-        log.info("saved %s (%s): %s", slug, kind, [n for n, _ in files])
+        for kind, suffix, asset in sources(member):
+            if seen.get(kind) == asset.key:
+                continue
+            files = targets(slug, suffix)
+            # Only trust files already on disk when we've never tracked this kind
+            # before (e.g. state.json was reset). If we *have* a prior hash for it,
+            # a same-day second change means those files are stale leftovers from
+            # the first change and must be re-saved, not skipped.
+            if kind not in seen and all((d / name).exists() for d in dirs for name, _ in files):
+                seen[kind] = asset.key  # already have today's copy; remember hash
+                continue
+            try:
+                base = to_png(await fetch_bytes(asset))
+            except FETCH_ERRORS:
+                log.exception("failed to fetch %s (%s); will retry on next event", slug, kind)
+                continue
+            for d in dirs:
+                d.mkdir(parents=True, exist_ok=True)
+                for name, letter in files:
+                    (stamp(base, letter) if letter else base).save(d / name)
+            seen[kind] = asset.key
+            changed = True
+            log.info("saved %s (%s): %s", slug, kind, [n for n, _ in files])
 
-    save_state(state)
-    return changed
+        save_state(state)
+        return changed
 
 
 intents = discord.Intents.default()
