@@ -28,9 +28,9 @@ STATE_PATH = HERE / "state.json"
 OUT = Path(CONFIG["output_dir"])
 USERS = CONFIG["users"]              # {user_id: slug}
 STAMPS = CONFIG.get("stamps", {})    # {slug: [letters]}
-SAVE_MAIN = CONFIG.get("save_main", False)  # also store global pfp as -main
+SAVE_MAIN = CONFIG.get("save_main", False)  # also store global pfp under main/
 GUILD_ID = CONFIG.get("guild_id")    # restrict to this server (else all guilds)
-CURRENT = OUT / "current"            # always mirrors the newest set
+KINDS = ["server"] + (["main"] if SAVE_MAIN else [])
 SIZE = 512
 
 
@@ -68,7 +68,7 @@ def stamp(img: Image.Image, letter: str) -> Image.Image:
     try:
         font = ImageFont.truetype("arialbd.ttf", fontsize)
     except OSError:
-        font = ImageFont.load_default()
+        font = ImageFont.load_default(fontsize)  # no Arial (e.g. Linux)
     stroke = max(2, fontsize // 16)
     l, t, r, b = draw.textbbox((0, 0), letter, font=font, stroke_width=stroke)
     margin = img.width // 20
@@ -80,23 +80,21 @@ def stamp(img: Image.Image, letter: str) -> Image.Image:
 
 
 def targets(slug: str, suffix: str = ""):
-    """Filenames to write for a slug (plain name; date is the folder)."""
+    """Filenames to write for a slug (plain name; date is the folder).
+    `suffix` disambiguates a second change on the same day."""
     if slug in STAMPS:
         return [(f"{slug}-{L}{suffix}.png", L) for L in STAMPS[slug]]
     return [(f"{slug}{suffix}.png", None)]
 
 
 def sources(member: discord.Member):
-    """(kind, filename-suffix, asset) to save for a member.
+    """(kind, asset) to save for a member; each kind gets its own folder.
 
-    Default: the per-server avatar (guild avatar if set, else global).
-    If SAVE_MAIN, also the main/global avatar as `<slug>-main.png` — but only
-    when it differs from the server one (else it's the same image)."""
-    out = [("server", "", member.display_avatar)]
+    server: what the server shows (guild avatar if set, else global).
+    main:   the global/default pfp, only if SAVE_MAIN."""
+    out = [("server", member.display_avatar)]
     if SAVE_MAIN:
-        main = member.avatar or member.default_avatar
-        if main.key != member.display_avatar.key:
-            out.append(("main", "-main", main))
+        out.append(("main", member.avatar or member.default_avatar))
     return out
 
 
@@ -117,11 +115,12 @@ async def fetch_bytes(asset: discord.Asset, attempts: int = 3, delay: float = 2.
     raise AssertionError("unreachable")
 
 
+STATE = load_state()         # single in-memory copy; handlers must never reload
 STATE_LOCK = asyncio.Lock()  # on_member_update/on_user_update fire back-to-back
                               # for one avatar change; serialize state read-modify-write
 
 
-async def save_member(member: discord.Member, state: dict) -> bool:
+async def save_member(member: discord.Member, state: dict = STATE) -> bool:
     """Save member's avatar(s) if the hash changed. Returns True if any saved."""
     uid = str(member.id)
     slug = USERS.get(uid)
@@ -132,14 +131,15 @@ async def save_member(member: discord.Member, state: dict) -> bool:
         seen = state.setdefault(uid, {})
         if isinstance(seen, str):  # migrate old single-hash format
             seen = state[uid] = {}
-        date = datetime.now().strftime("%y%m%d")
-        dirs = [OUT / date, CURRENT]  # dated history + always-latest mirror
+        now = datetime.now()
         changed = False
 
-        for kind, suffix, asset in sources(member):
+        for kind, asset in sources(member):
             if seen.get(kind) == asset.key:
                 continue
-            files = targets(slug, suffix)
+            day, current = OUT / kind / now.strftime("%y%m%d"), OUT / kind / "current"
+            dirs = [day, current]  # dated history + always-latest mirror
+            files = targets(slug)
             # Only trust files already on disk when we've never tracked this kind
             # before (e.g. state.json was reset). If we *have* a prior hash for it,
             # a same-day second change means those files are stale leftovers from
@@ -152,13 +152,15 @@ async def save_member(member: discord.Member, state: dict) -> bool:
             except FETCH_ERRORS:
                 log.exception("failed to fetch %s (%s); will retry on next event", slug, kind)
                 continue
-            for d in dirs:
+            # 2nd+ change today: keep the earlier file, add a time-tagged one
+            tag = now.strftime("-%H%M%S") if (day / files[0][0]).exists() else ""
+            for d, names in ((day, targets(slug, tag)), (current, files)):
                 d.mkdir(parents=True, exist_ok=True)
-                for name, letter in files:
+                for name, letter in names:
                     (stamp(base, letter) if letter else base).save(d / name)
             seen[kind] = asset.key
             changed = True
-            log.info("saved %s (%s): %s", slug, kind, [n for n, _ in files])
+            log.info("saved %s (%s): %s", slug, kind, [n for n, _ in targets(slug, tag)])
 
         save_state(state)
         return changed
@@ -171,15 +173,15 @@ client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
-    CURRENT.mkdir(parents=True, exist_ok=True)  # always exists, even if nothing changed
-    state = load_state()
+    for kind in KINDS:  # always exists, even if nothing changed
+        (OUT / kind / "current").mkdir(parents=True, exist_ok=True)
     saved = 0
     for guild in client.guilds:
         if not in_scope(guild):
             continue
         for member in guild.members:
             if str(member.id) in USERS:
-                if await save_member(member, state):
+                if await save_member(member):
                     saved += 1
     log.info("ready as %s: reconciled, %s new avatar(s)", client.user, saved)
 
@@ -187,7 +189,7 @@ async def on_ready():
 @client.event
 async def on_member_update(before, after):
     if in_scope(after.guild) and str(after.id) in USERS:
-        await save_member(after, load_state())
+        await save_member(after)
 
 
 @client.event
@@ -198,7 +200,7 @@ async def on_user_update(before, after):
             continue
         m = guild.get_member(after.id)
         if m and str(m.id) in USERS:
-            await save_member(m, load_state())
+            await save_member(m)
             return
 
 

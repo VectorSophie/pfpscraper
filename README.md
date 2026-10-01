@@ -15,15 +15,20 @@ Event-driven (gateway), near-zero API cost: it only downloads an image when some
    - `output_dir` — where images go.
    - `users` — `{ "<discord_user_id>": "<slug>" }`. Only listed users are tracked.
    - `stamps` — optional `{ "<slug>": ["A", "B"] }` to save multiple copies with a letter stamped bottom-right (bold white, dark outline).
-   - `save_main` — optional bool (default `false`). By default only the **per-server** avatar is saved. Set `true` to also save each user's main/global pfp as `<slug>-main.png` (skipped when it's the same image as the server one).
+   - `save_main` — optional bool (default `false`). Also save each user's main/global (default) pfp into its own `main/` folder.
 
 ## Run
-`python pfpscraper.py`, or double-click `run.bat` (silent, no console). Drop a shortcut to `run.bat` in your Startup folder to launch at login.
+- Windows: `python pfpscraper.py`, or double-click `run.bat` (silent). Put a shortcut to `run.bat` in your Startup folder to launch at login.
+- Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, then run it as a systemd user service (`~/.config/systemd/user/pfpscraper.service`, `ExecStart=<repo>/.venv/bin/python pfpscraper.py`, `systemctl --user enable --now pfpscraper`).
 
 ## Output
-`<output_dir>/<YYMMDD>/<slug>.png` — one dated folder per day, 512px static PNG (the per-server avatar). Stamped users get `<slug>-A.png`, `<slug>-B.png`, etc. With `save_main`, the global pfp is also written as `<slug>-main.png`. Same-day duplicates are skipped.
-
-`<output_dir>/current/` always mirrors the newest set — every save writes to both the dated folder and `current/`, so point your tierlist at `current/` and it's never stale.
+```
+<output_dir>/server/<YYMMDD>/<slug>.png   what the server shows (server pfp, else global)
+<output_dir>/server/current/<slug>.png    always the newest -> point the tierlist here
+<output_dir>/main/<YYMMDD>/<slug>.png     global/default pfp (only with save_main)
+<output_dir>/main/current/<slug>.png
+```
+512px static PNG. Stamped users get `<slug>-A.png`, `<slug>-B.png`, etc. If someone changes their pfp again on the same day, the earlier file is kept and the new one is saved as `<slug>-HHMMSS.png`. `current/` always holds the newest one under the plain name.
 
 ## Test
 `python test_pfpscraper.py`
